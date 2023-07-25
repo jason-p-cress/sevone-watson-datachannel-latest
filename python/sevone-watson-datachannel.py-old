@@ -1,0 +1,662 @@
+#!/usr/local/bin/python
+
+#
+# SevOne Data Bus datachannel for Watson AIOps metric anomaly detection
+#
+# 04/01/22 - Jason Cress (jcress@us.ibm.com)
+#
+
+from avro.io import DatumReader
+#import avro.io
+import logging
+try: 
+    import queue
+except ImportError:
+    import Queue as queue
+import socket
+import ssl
+import time
+import threading
+from datetime import datetime
+try:
+   from confluent_kafka import Consumer, KafkaError, Producer
+except ImportError:
+   print("FATAL: Unable to load confluent_kafka. Make sure you have installed confluent-kafka package. It can be installed using pip as such:\n\tpip install confluent-kafka")
+   exit()
+from confluent_kafka.admin import AdminClient
+#from confluent_kafka.schema_registry.avro import AvroDeserializer
+import io
+import json
+import os
+import sys
+import re
+import time
+
+
+
+######################################################
+#
+# Function to load and validate datachannel properties
+#
+######################################################
+
+def loadProperties(filepath, sep='=', comment_char='#'):
+
+    # Read the file passed as parameter as a properties file.
+    
+    props = {}
+    with open(filepath, "rt") as f:
+        for line in f:
+            l = line.strip()
+            if l and not l.startswith(comment_char) and "=" in l:
+                key_value = l.split(sep)
+                key = key_value[0].strip()
+                value = sep.join(key_value[1:]).strip().strip('"')
+                props[key] = value
+
+    return props
+
+###############################################
+#
+# Function to read the metrics-ignore.conf file
+#
+###############################################
+
+def loadMetricsIgnore(filepath, comment_char='#'):
+
+   if(os.path.exists(filepath)):
+      with open (filepath, "rt") as f:
+         for line in f:
+            l = line.strip()
+            if l and not l.startswith(comment_char):
+               ignoreMetrics.add(l)
+
+###############################################
+#
+# Function to read the counter-metrics.conf file
+#
+###############################################
+
+def loadCounters(filepath, comment_char='#'):
+
+   if(os.path.exists(filepath)):
+      with open (filepath, "rt") as f:
+         for line in f:
+            l = line.strip()
+            if l and not l.startswith(comment_char):
+               counterMetrics.add(l)
+
+###################################
+#
+# Producer acknowledgement function
+#
+###################################
+
+def acked(err,msg):
+   if err is not None:
+      logging.info("Failed to deliver message: %s: %s" % (str(msg), str(err)))
+   else:
+      pass
+      #print("Message produced: %s" % (str(msg)))
+
+#####################################
+#
+# Puts metric onto Watson kafka topic
+#
+#####################################
+
+def produceMetric(metricData):
+
+   global statsOnly
+
+   if not statsOnly:
+      watsonProducer.produce(watsonKafkaTopicName,key="key",value=metricData, callback=acked)
+      watsonProducer.poll(0.001)
+
+def postMetric(metricData):
+
+   #################################################
+   #
+   # Not currently implemented, future functionality
+   #
+   #################################################
+
+   print("Posting data to PI REST API: " + metricData)
+   global restMediationServiceHost
+   global restMediationServicePort
+   global watsonTopicName
+
+   #encodedMetricData = urllib.parse.urlencode(metricData)
+   encodedMetricData = metricData.encode('utf-8')
+
+   #######################################################
+   #
+   # Function to post metric to WAIOps for analysis
+   #
+   #######################################################
+
+   method = "POST"
+
+   requestUrl = 'http://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
+   #requestUrl = 'http://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/'
+   #requestUrl = 'http://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
+
+   #authHeader = 'Basic ' + base64.b64encode(asmServerDict["user"] + ":" + asmServerDict["password"])
+   #print "auth header is: " + str(authHeader)
+   #print "creating the following resource in ASM: " + jsonResource
+
+   try:
+     # request = urllib2.Request(requestUrl, metricData)
+      request = urllib.request.Request(requestUrl, encodedMetricData)
+      request.add_header("Content-Type",'application/json')
+      request.add_header("tenantID",watsonTopicName)
+      request.get_method = lambda: method
+
+     # response = urllib2.urlopen(request)
+      response = urllib.request.urlopen(request)
+      xmlout = response.read()
+      return True
+
+   except IOError as e:
+      print('Failed to open "%s".' % requestUrl)
+      if hasattr(e, 'code'):
+         print('We failed with error code - %s.' % e.code)
+      elif hasattr(e, 'reason'):
+         print("The error object has the following 'reason' attribute :")
+         print(e.reason)
+         #print("This usually means the server doesn't exist,", end=' ')
+         print("is down, or we don't have an internet connection.")
+      return False
+
+def logTimeDelta(first):
+
+   global watsonTopicAggInterval
+   global longestDelta
+   global intervalMetricCount
+   global shutdownRequest
+
+   ###############################################################
+   #
+   # This function runs every PI interval (5-minutes), and prints
+   # out the following information:
+   #
+   #   - Average kafka latency (seconds)
+   #   - Longest kafka latency (seconds)
+   # 
+   #   These metrics show the average/longest time it takes from
+   #   SevOne's collection time to the time in which we pick it
+   #   up from the SevOne databus kafka. If these numbers are 
+   #   high (e.g. longer than the PI agg interval) it may be 
+   #   necessary to extend PI's topic latency. Additionally, 
+   #   it may be due to performance issues with the SevOne 
+   #   databus kafka server.
+   #
+   #   - Number of metrics consumed (count)
+   #
+   #   The number of metrics collected during the interval. This
+   #   count should be reasonably consistent every interval. 
+   #   
+   #   - PI Kafka producer queue length (count)
+   #
+   #   The number of metrics waiting to be sent to PI's Kafka
+   #   topic. If this number is large (i.e. > 100) and/or
+   #   continues to grow larger with every interval, then it is 
+   #   likely due to a performance issue with the PI Kafka server.
+   # 
+   #
+   ###############################################################
+
+   while shutdownRequest != True:
+      if first:
+         secToInterval = (( 4 - datetime.now().minute % int(watsonTopicAggInterval)) * 60 ) + (60 - datetime.now().second)
+         print("Starting datachannel, " + str(secToInterval) + " seconds to next interval...")
+         time.sleep(secToInterval)
+      currTime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+      first=False
+      logging.info('==== INTERVAL STATISTICS FOR ' + currTime + '====')
+      ###############################################
+      #
+      # If indicator/resource logging is requested...
+      #
+      ###############################################
+      if(logUniqueIndicators.lower == "true"):
+         logging.debug('Unique indicators seen during interval: ' + str(intervalMetricSet))
+      if(logUniqueResources.lower == "true"):
+         logging.debug('Unique resources seen during interval: ' + str(intervalResourceSet))
+      logging.info('Longest kafka latency for interval is: ' + str(longestDelta / 1000) + ' seconds.')
+      logging.info('Number of unique metric/resources consumed (metric count): ' + str(intervalMetricCount) )
+      logging.info('Number of unique metric indicators: ' + str(len(intervalMetricSet)))
+      logging.info('Number of unique resources: ' + str(len(intervalResourceSet)))
+      logging.info('PI Kafka producer queue length: ' + str(publishQueue.qsize()))
+      intervalMetricSet.clear()
+      intervalResourceSet.clear()
+      intervalMetricCount = 0
+      longestDelta = 0
+      time.sleep(int(watsonTopicAggInterval) * 60)
+
+###############################
+#
+# Set up the stats logger timer
+#
+###############################
+
+def logTimeDeltaCron(callback_func, first=True):
+   
+   if first:
+      secToInterval = (( 4 - datetime.now().minute % int(watsonTopicAggInterval)) * 60 ) + (60 - datetime.now().second)
+      time.sleep(secToInterval)
+   callback_func()
+   time.sleep(int(watsonTopicAggInterval) * 60)
+   logTimeDeltaCron(callback_func, False)
+
+
+def fastAvroDecode(msg_value):
+
+   #############################################################################################
+   #
+   # This function decodes the SevOne avro message, and returns a PI mapped/converted dictionary
+   #
+   #############################################################################################
+
+   message_bytes = io.BytesIO(msg_value)
+   event_dict = fastavro.schemaless_reader(message_bytes, fastavro.parse_schema(schema))
+   return event_dict
+
+def translateToWatsonMetric(event_dict):
+
+   # Build WAIOps json
+   if(event_dict["indicatorName"] in ignoreMetrics):
+      return("NULL")
+   else:
+      try:
+         waiopsMetric = dict()
+         waiopsMetric["attributes"] = dict()
+         waiopsMetric["metrics"] = dict()
+         waiopsMetric["metrics"][event_dict["indicatorName"]] = float(event_dict["value"])
+         waiopsMetric["attributes"]["node"] = event_dict["deviceName"]
+         waiopsMetric["attributes"]["interface"] = event_dict["objectName"]
+         waiopsMetric["attributes"]["group"] = watsonMetricGroup
+         if(event_dict["indicatorName"] in counterMetrics):
+            waiopsMetric["attributes"]["accumulators"] = event_dict["indicatorName"]
+         waiopsMetric["timestamp"] = int(event_dict["time"] * 1000)
+         waiopsMetric["tenantID"] = watsonTopicName
+         waiopsMetric["resourceID"] = event_dict["deviceName"] + ":" + event_dict["objectName"]
+         waiopsGroup = {}
+         waiopsGroup["groups"] = []
+         waiopsGroup["groups"].append(waiopsMetric)
+         return(waiopsGroup)
+      except:
+         logging.info("Unable to process message: " + json.dumps(event_dict))
+         return("NULL")
+
+###########################
+#
+# Publisher thread function
+#
+###########################
+
+def publishMetric():
+
+   global shutdownRequest
+
+   while shutdownRequest != True:
+      item = publishQueue.get()
+      produceMetric(json.dumps(item))
+      publishQueue.task_done()
+
+
+#############
+#
+# Begins here
+#
+#############
+
+shutdownRequest = False
+intervalMetricSet = set()
+intervalResourceSet = set()
+longestDelta = 0
+intervalNumber = 0
+intervalMetricCount = 0
+
+###################
+#
+# Ignore SSL errors
+#
+###################
+
+if (not os.environ.get('PYTHONHTTPSVERIFY', '') and getattr(ssl, '_create_unverified_context', None)):
+      ssl._create_default_https_context = ssl._create_unverified_context
+
+#ctx = ssl.create_default_context()
+#ctx.check_hostname = False
+#ctx.verify_mode = ssl.CERT_NONE
+
+
+###############################
+#
+# Set up file paths and logging
+#
+###############################
+
+# The following does not work if using nuitka to compile the code into ELF binary. Using sys.argv[0] instead
+
+#mediatorBinDir = os.path.dirname(os.path.abspath(__file__))
+
+
+print('sys.argv[0] =', sys.argv[0])             
+pathname = os.path.dirname(sys.argv[0])        
+print('path =', pathname)
+mediatorBinDir = os.path.abspath(pathname) + "/" + sys.argv[0]
+
+mediatorHome = os.path.dirname(os.path.abspath(pathname))
+
+print("mediatorBinDir is: " + mediatorBinDir)
+
+print("mediatorHome is: " + mediatorHome)
+
+
+if(os.path.isdir(mediatorHome + "/log")):
+   logHome = mediatorHome + "/log/"
+   LOG_FILENAME=logHome + "sevone-mediator.log"
+   now = datetime.now()
+   ts = now.strftime("%d/%m/%Y %H:%M:%S")
+   print("opening log file " + logHome + "/sevone-mediator.log")
+   try:
+      logging.basicConfig(level=logging.DEBUG, filename=LOG_FILENAME, filemode="w+",format="%(asctime)-15s %(levelname)-8s %(message)s")
+      logging.info("Mediator started at: " + ts + "\n")
+   except:
+      print("FATAL: failed to start logging. Verify logging path available and disk space.")
+      exit()
+else:
+   logging.info("FATAL: unable to find log directory at " + mediatorHome + "log")
+   print("FATAL: unable to find log directory at " + mediatorHome + "log")
+   sys.exit()
+
+# Redirect stdout to log/datachannel.out
+
+print("Redirecting stdout to " + logHome + "datachannel.out")
+sys.stdout = open(logHome + "datachannel.out", "w")
+print("Redirect complete")
+
+print("Redirecting stderr to " + logHome + "datachannel.err")
+sys.stdout = open(logHome + "datachannel.err", "w")
+print("Redirect complete")
+
+##########################################
+#
+# Read and validate datachannel properties
+# Include 'avro' packages if required
+#
+##########################################
+
+
+ignoreMetrics = set()
+loadMetricsIgnore(mediatorHome + "/conf/metrics-ignore.conf")
+counterMetrics = set()
+loadCounters(mediatorHome + "/conf/counter-metrics.conf")
+
+print("Metrics to be ignored: ")
+for metric in ignoreMetrics:
+   print(metric)
+
+print("Counter type metrics: ")
+for metric in counterMetrics:
+   print(metric)
+
+if(os.path.exists(mediatorHome + "/conf/sevone-watson-datachannel.props")):
+   props = loadProperties(mediatorHome + "/conf/sevone-watson-datachannel.props")
+   logging.debug("Properties: = " + json.dumps(props))
+   print("Properties: = " + json.dumps(props))
+else:
+   print("FATAL: Properties file " + mediatorHome + "/conf/sevone-watson-datachannel.props is missing.")
+   logging.info("FATAL: Properties file " + mediatorHome + "/conf/sevone-watson-datachannel.props is missing.")
+   exit()
+
+# convert properties to variables
+
+locals().update(props)
+
+# validate required properties exist and set defaults where possible
+
+logging.debug("SevOne kafka server(s): " + sevOneKafkaServers)
+
+if 'sevOneKafkaServers' not in locals():
+   print("FATAL: sevOneKafkaServers not set in properties file! Specify at least one SevOne Data Bus Kafka server.")
+   logging.info("FATAL: sevOneKafkaServers not set in properties file! Specify at least one SevOne Data Bus Kafka server.")
+   exit()
+logging.debug("sevOneKafkaServers = " + sevOneKafkaServers)
+
+if 'watsonKafkaServers' not in locals():
+   print("FATAL: watsonKafkaServers not set in properties file! Specify at least one Watson AIOps kafka server.")
+   logging.info("FATAL: watsonKafkaServers not set in properties file! Specify at least one Watson AIOps kafka server.")
+   exit()
+logging.debug("watsonKafkaServer(s): " + watsonKafkaServers)
+   
+if 'watsonKafkaTopicName' not in locals():
+   print("FATAL: Watson AIOps kafka topic name not specified in properties file! Configure the topc name property \"watsonKafkaTopicName\"")
+   logging.info("FATAL: Watson AIOps kafka topic name not specified in properties file! Configure the topc name property \"watsonKafkaTopicName\"")
+   exit()
+logging.debug("watsonKafkaTopicName = " + watsonKafkaTopicName)
+
+if 'watsonTopicAggInterval' not in locals():
+   watsonTopicAggInterval = "5"
+   logging.info("watsonTopicAggInterval not specified in properties file. Setting to 5 minutes")
+logging.debug("watsonTopicAggInterval = " + watsonTopicAggInterval)
+
+if 'sevOneKafkaTopicName' not in locals():
+   sevOneKafkaTopicName = "sdb"
+   logging.info("sevOneKafkaTopicName not specified in properties file. Setting to \"sdb\".")
+logging.debug("sevOneKafkaTopicName = " + sevOneKafkaTopicName)
+
+if 'sevOneKafkaDataFormat' in locals():
+
+   if sevOneKafkaDataFormat.lower() == "avro":
+      try:
+         import fastavro
+      except ImportError:
+         print("FATAL: Unable to load required Python package 'fastavro'. It can be installed using pip as such:\n\tpip install fastavro\n")
+         exit()
+      try:
+         #import avro.io
+         import avro.schema
+      except ImportError:
+         print("FATAL: Unable to load required Python package 'avro'. It can be installed using pip as such:\n\tpip install avro\n")
+         exit()
+   elif sevOneKafkaDataFormat.lower() != "json":
+      logging.info("Unknown sevOneKafkaDataFormat value. Should be set to \"Avro\" or \"JSON\". Defaulting to \"Avro\".")
+else:
+   logging.info("sevOneKafkaDataFormat not specified in properties file. Setting to \"Avro\".")
+   sevOneKafkaDataFormat = "Avro"
+logging.debug("sevOneKafkaDataFormat = " + sevOneKafkaDataFormat)
+
+if 'logUniqueIndicators' not in locals():
+   logUniqueIndicators = "false"
+else:
+   if logUniqueIndicators <> "false" or logUniqueIndicators <> "true":
+      logUniqueIndicators = "false"
+
+if 'logUniqueResources' not in locals():
+   logUniqueResources = "false"
+else:
+   if logUniqueResources <> "false" or logUniqueResources <> "true":
+      logUniqueResources = "false"
+
+print("Properties loaded successfully")
+   
+################################
+#
+# Set up avro schema if required
+#
+################################
+
+if sevOneKafkaDataFormat.lower() == "avro":
+   if(os.path.exists(mediatorHome + "/conf/sevone-avro-schema.json")):
+      schemafile = open(mediatorHome + "/conf/sevone-avro-schema.json", "r")
+      try:
+         schema = json.loads(schemafile.read())
+      except:
+         print("FATAL: Unable to parse SevOne Avro schema file. Please verify that it is the correct format (JSON)")
+         logging.info("FATAL: Unable to parse SevOne Avro schema file. Please verify that it is the correct format (JSON)")
+         exit()
+   else:
+      print("FATAL: SevOne data format is configured for Avro, but the required Avro schema file does not exist at " + mediatorHome + "/conf/sevone-avro-schema.json")
+      print("Please obtain the SevOne Avro schema in the SevOne data bus config and place the JSON in the sevone-avro-schema.json file.")
+      logging.info("FATAL: SevOne data format is configured for Avro, but the required Avro schema file does not exist at " + mediatorHome + "/conf/sevone-avro-schema.json")
+      logging.info("Please obtain the SevOne Avro schema in the SevOne data bus config and place the JSON in the sevone-avro-schema.json file.")
+      exit()
+
+print("Going to parse avro schema: " + json.dumps(schema))
+try:
+   parsed_schema = avro.schema.parse(json.dumps(schema))
+except Exception as e:
+   logging.info("FATAL: Unable to parse Avro schema. Verify that the schema definition is correct.")
+   print("FATAL: Unable to parse avro schema. Verify that the schema definition is correct.")
+   print e
+   exit()
+#reader = avro.io.DatumReader(parsed_schema)
+reader = DatumReader(parsed_schema)
+print("Avro schema parsed successfully")
+
+#############################
+#
+# Connect to Watson Kafka bus
+#
+#############################
+
+watsonKafkaConfig = {
+     'bootstrap.servers': watsonKafkaServers,
+     'client.id': "SevOneDatachannel@" + socket.gethostname(),
+     'queue.buffering.max.ms': 5}
+
+watsonProducer = Producer(watsonKafkaConfig)
+
+watson_admin_client = AdminClient(watsonKafkaConfig)
+topics = watson_admin_client.list_topics().topics
+if not topics:
+   logging.info("FATAL: Unable to verify connectivity and topics in the Watson kafka bus at " + watsonKafkaServers + ". Verify kafka configuration, reconfigure, and retry.")
+   print("FATAL: Unable to verify connectivity and topics in the Watson kafka bus at " + watsonKafkaServers + ". Verify kafka configuration, reconfigure, and retry.")
+   exit()
+elif watsonKafkaTopicName not in topics:
+   print("FATAL: Watson kafka topic name (" + watsonKafkaTopicName + ") does not exist in the Watson kafka. Available topics: " + topics + ". Ensure proper topic configuration.")
+   exit()
+
+logging.debug("Watson AIOps Kafka topic available.")
+
+#############################
+#
+# Connect to SevOne Kafka bus
+#
+#############################
+
+kafkasettings = {
+    'bootstrap.servers': sevOneKafkaServers,
+    'group.id': 'waiopsMetric-group',
+    'client.id': 'waiopsMetric-client-1@' + socket.gethostname(),
+    'enable.auto.commit': False,
+    'session.timeout.ms': 6000,
+    'socket.timeout.ms': 3000,
+    'default.topic.config': {'auto.offset.reset': 'latest'},
+    'security.protocol' : 'SSL',
+    'ssl.ca.location': '/u01/IBM/sevone-watson-datachannel-main_org20230403/certs/rootcert.pem',
+    'ssl.certificate.location': '/u01/IBM/sevone-watson-datachannel-main_org20230403/certs/servercert.pem',
+    'ssl.key.location': '/u01/IBM/sevone-watson-datachannel-main_org20230403/certs/privatekey.pem'
+}
+
+c = Consumer(kafkasettings)
+
+logging.debug("Verifying SevOne kafka topic - listing topics")
+
+admin_client = AdminClient(kafkasettings)
+topics = admin_client.list_topics().topics
+if not topics:
+   logging.info("FATAL: Unable to verify connectivity and topics in SevOne kafka bus at " + sevOneKafkaServers + ". Verify kafka configuration, reconfigure, and retry.")
+   print("FATAL: Unable to verify connectivity and topics in SevOne kafka bus at " + sevOneKafkaServers + ". Verify kafka configuration, reconfigure, and retry.")
+   exit()
+elif sevOneKafkaTopicName not in topics:
+   print("FATAL: SevOne kafka topic name does not exist in SevOne kafka. Available topics: " + topics + ". Ensure proper topic configuration.")
+   exit()
+
+logging.debug("Successfully listed topics in SevOne kafka. Topics returned: " + str(topics))
+
+logging.debug("Subscribing to SevOne kafka topic")
+try:
+   c.subscribe([sevOneKafkaTopicName])
+except Exception as e:
+   logging.info("FATAL: Unable to connect to SevOne Kafka bus at " + sevOneKafkaServers + ". Verify Kafka configuration, reconfigure, and retry.")
+   print("FATAL: Unable to connect to SevOne Kafka bus at " + sevOneKafkaServers + ". Verify Kafka configuration, reconfigure, and retry.")
+   exit()
+   
+logging.debug("SevOne Kafka Topic available.")
+
+
+######################
+#
+# Main processing loop
+#
+######################
+
+
+statsOnly = True
+
+perfStatThread = threading.Thread(target=logTimeDelta, args=(True,))
+perfStatThread.daemon = True
+perfStatThread.start()
+
+publishQueue = queue.Queue()
+
+publishThread = threading.Thread(target=publishMetric)
+publishThread.daemon = True
+publishThread.start()
+
+try:
+    while True:
+        msg = c.poll(0.1)
+        if msg is None:
+            continue
+        elif not msg.error():
+           if sevOneKafkaDataFormat.lower() == "avro":
+              metricJson = translateToWatsonMetric(fastAvroDecode(msg.value()))
+           else:
+              metricJson = translateToWatsonMetric(json.loads(msg.value()))
+           lastMessage = metricJson
+           if(metricJson == "NULL"):
+              pass
+           else:
+              if 'timestamp' in metricJson["groups"][0]:
+                 publishQueue.put(metricJson)
+                 intervalMetricCount += 1
+                 currTime = int(time.time() * 1000)
+                 deltaTime = currTime - int(metricJson["groups"][0]["timestamp"])
+                 if(deltaTime > longestDelta):
+                    longestDelta = deltaTime
+                 for key in metricJson["groups"][0]["metrics"]:
+                    intervalMetricSet.add(key)
+                 if 'resourceID' in metricJson["groups"][0]:
+                    intervalResourceSet.add(metricJson["groups"][0]["resourceID"])
+              else:
+                 logging.info("WARNING: Message received contains no timestamp field. Message is: " + json.dumps(metricJson))
+            
+        elif msg.error().code() == KafkaError._PARTITION_EOF:
+            print('End of partition reached {0}/{1}'
+                  .format(msg.topic(), msg.partition()))
+        else:
+            print('Error occured: {0}'.format(msg.error().str()))
+
+except KeyboardInterrupt:
+    pass
+
+finally:
+   shutdownRequest = True
+   now = datetime.now()
+   ts = now.strftime("%d/%m/%Y %H-%M-%S")
+   logging.info('Mediator shut down at: ' + ts)
+   if(lastMessage):
+      logging.info('Last message: ' + json.dumps(lastMessage))
+   if(publishThread.is_alive()):
+      
+      print("publishThread is still alive")
+   if(perfStatThread.is_alive()):
+      print("perfStatThread is still alive")
+   c.close()
+   sys.stdout.close()
+

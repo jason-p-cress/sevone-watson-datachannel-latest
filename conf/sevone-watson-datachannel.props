@@ -1,0 +1,78 @@
+############################
+# SevOne configuration items
+############################
+
+# sevOneKafkaDataFormat is configured in the SevOne Data Bus configuration. It will be either "Avro" or "JSON". Defaults to Avro.
+# sevOneKafkaDataFormat = "Avro"
+
+sevOneKafkaDataFormat = "Avro"
+
+# sevOneKafkaTopicName is "sdb" by default. If you are sending to an alternate Kafka topic, set this value appropriately.
+sevOneKafkaTopicName = "sdb"
+
+# sevOneKafkaServers - enter hostname/IP addresses and ports of SevOne kafka bootstrap servers. Separate multiple servers by comma. Example: "sevonedbhost1:9092,sevonedbhost2:9092"
+sevOneKafkaServers = "CHANGEME.mydomain.com:9092"
+
+# sevOneKafkaSSL - "true" if SSL is required, "false" if SSL is not enabled. If SSL is required, ensure that the conf/sevone-kafka-ssl.props is configured properly with CA certificate, server certificate, and key file
+sevOneKafkaSSL = "true"
+
+#########################################################################
+# Predictive Insights / Metric Manager / Watson AIOPs configuration items
+#########################################################################
+
+# (not implemented yet)
+# watsonProductTarget - either 'watson' or 'pi'. Use 'pi' for Predictive Insights, or 'aiops' for Metric Anomaly Detection (MAD) on AI Manager or NOI
+watsonProductTarget = "pi"
+
+# (not implemented yet - currently only supports kafka)
+# publishType - either 'kafka' to publish to the kafka topic of AI Manager/NOI/Predictive Insights REST mediation utility kafka, or "rest" so send to the metrics REST api for AIMgr/NOI/PI REST mediation utility
+# "rest" publish type is not implemented currently
+publishType = "rest" 
+
+# watsonKafkaServers - enter hostname/IP addresses and ports of the PI Kafka bootstrap servers. Separate multiple servers by comma. Example: "waiopskafkahost1:9092,waiopskafkahost2:9092
+watsonKafkaServers = "localhost:9092"
+
+# watsonKafkaTopicName - the topic name of the configured kafka. Typically 'metrics'
+watsonKafkaTopicName = "metrics"
+
+# watsonKafkaSSL - "true" if ssl is required, "false" if SSL is not enabled. If SSL is required, ensure that the conf/watson-kafka-ssl.props is configured properly
+watsonKafkaSSL = "false"
+
+# watsonMetricGroup - the metric group name used when submitting metrics. Defaults to 'sevone'. Only change this if you have a good reason.
+watsonMetricGroup = "sevone"
+
+# watsonTopicName - the name of the Predictive Insights topic that was created to ingest Kafka/REST metrics... only applicable to Predictive Insights target 
+watsonTopicName = "SEVONE"
+
+# watsonTopicAggInterval - The aggregation interval of the watson topic IN MINUTES. Defaults to 5. This is not strictly required to be set 
+# correctly, but will give more
+# accurate information regarding the number of metrics that are collected per interval, which is useful for PI sizing. If 'watsonProductTarget' is 'watson', the default is 5 minutes
+watsonTopicAggInterval = 5
+
+restMediationServiceAuthentication = "false"
+restMediationServiceUsername = "myuser"
+restMediationServicePassword = "mypassword"
+restMediationServiceProtocol = "https"
+# use the hostname of the route for the metrics API in Watson, or the REST mediation service host for PI
+restMediationServiceHost = "localhost"
+# For watson this will be 443, for pi it will be whatever the metrics-api process is configured to listen on
+restMediationServicePort = "443"
+
+###########################
+# Extended logging options:
+###########################
+
+# logUniqueIndicators - this will log every unique indicator that has been collected in the last interval. Useful to determine if any particular metrics are missing at certain intervals
+# WARNING: Only use this in troubleshooting. It can potentially generate a lot of log messages
+logUniqueIndicators = "false"
+
+# logUniqueResources - this will log every unique resource that has been collected every interval. Useful to determine if any resources are missing at any intervals
+# WARNING: Only use this in troubleshooting. It can potentially generate a lot of log messages
+logUniqueResources = "false"
+
+# Logging level - only supports "DEBUG" or "INFO"
+loggingLevel = "DEBUG"
+
+# Log raw JSON as being passed to Watson/PI
+logRawJson = "false"
+
