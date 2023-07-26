@@ -154,22 +154,21 @@ def postMetric(postedData):
    
       method = "POST"
    
-      logging.debug("setting up the requestUrl")
+      logging.debug("setting up the targetUrl")
    
-      requestUrl = 'http://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
-      if(watsonProductTarget == "pi"):
-         requestUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
-         #requestUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
-         #requestUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
-      elif(watsonProductTarget == "aiops"):
-         requestUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/aiops/api/app/metric-api/v1/metrics'
-         #requestUrl = watsonRestRoute
+#      targetUrl = 'http://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
+#      if(watsonProductTarget == "pi"):
+#         targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
+#         #targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
+#         #targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
+#      elif(watsonProductTarget == "aiops"):
+#         targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/aiops/api/app/metric-api/v1/metrics'
+#         #targetUrl = watsonRestRoute
       
-      logging.debug("requestURL is " + requestUrl + ", now going to post")
+      logging.debug("requestURL is " + targetUrl + ", now going to post")
    
       try:
-        # request = urllib2.Request(requestUrl, metricData)
-         request = urllib2.Request(requestUrl, data=encodedMetricData)
+         request = urllib2.Request(targetUrl, data=encodedMetricData)
          request.add_header("Content-Type",'application/json')
          if(watsonProductTarget == "pi"):
             request.add_header("X-TenantID",watsonTopicName)
@@ -183,7 +182,7 @@ def postMetric(postedData):
          response = urllib2.urlopen(request)
    
       except IOError as e:
-         logging.info('Failed to open "%s".' % requestUrl)
+         logging.info('Failed to open "%s".' % targetUrl)
          if hasattr(e, 'code'):
             logging.info('We failed with error code - %s.' % e.code)
          elif hasattr(e, 'reason'):
@@ -528,6 +527,7 @@ def configProperties():
    global sevOneKafkaDataFormat
    global restMediationServiceAuthentication
    global authHeader
+   global targetUrl
    
    ignoreMetrics = set()
    loadMetricsIgnore(mediatorHome + "/conf/metrics-ignore.conf")
@@ -576,18 +576,32 @@ def configProperties():
    
    if( "publishType" in globals()):
       publishType = datachannelProps["publishType"]
+      if "watsonProductTarget" in globals():
+         if(watsonProductTarget.lower() == "pi" and publishType.lower() == "rest"):
+            if( restMediationServiceProtocol.lower() in [ "http", "https" ] ):
+               if( "restMediationServicePort" in globals() and "restMediationServiceHost" in globals()):
+                  targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
+               else:
+                  logging.info("FATAL: restMediationServicePort and/or restMediationServiceHost properties missing. Please configure these properties for PI rest mediation")
+                  exit()
+            else:
+               logging.info("FATAL: Unknown restMediationServiceProtocol configured. Must be \'http\' or \'https\'")
+               exit()
+      else:
+         logging.info("FATAL: watsonProductTarget not set. Must be \'aiops\' or \'pi\'")
+         exit()
    else: 
-      if productTarget == "pi":
+      if watsonProductTarget.lower() == "pi":
          logging.info("FATAL: publishType not set in sevone-watson-datachannel.props. Please set it to \"kafka\" or \"rest\"")
          exit()
       else:
-         logging.info("INFO: publishType not set but productTarget is \'aiops\', defaulting to \'rest\'")
+         logging.info("INFO: publishType not set but watsonProductTarget is \'aiops\', defaulting to \'rest\'")
          publishType = "rest"
 
    if( publishType.lower == "kafka" ):
 
-      if productTarget.lower() == "aiops":
-         logging.info("FATAL: publishType is set to \'kafka'\, but productTarget is \'aiops\'. This is an unsupported configuration. For productTarget of \'aiops\' you must use \'rest\'")
+      if watsonProductTarget.lower() == "aiops":
+         logging.info("FATAL: publishType is set to \'kafka'\, but watsonProductTarget is \'aiops\'. This is an unsupported configuration. For watsonProductTarget of \'aiops\' you must use \'rest\'")
          exit()
 
    # Ensure that one or more Watson AIOps Kafka servers are defined
@@ -725,7 +739,7 @@ def configProperties():
       
       if datachannelProps['watsonRestRoute'] in datachannelProps:
          watsonRestRoute = datachannelProps['watsonRestRoute'] 
-         targetURL = watsonRestRoute
+         targetUrl = watsonRestRoute
       else:
          logging.info("FATAL: watsonRestRoute not configured in datachannel properties file. Add the property should be in the form: https://myOpenshiftDNSName/aiops/api/app/metric-api/v1/metrics")
          exit()
@@ -829,7 +843,7 @@ global sevOneKafkaServers
 global watsonKafkaServers
 global watsonTopicAggInterval
 global watstonKafkaTopicName
-
+global targetUrl
 
 
 print("Starting datachannel")
@@ -947,6 +961,8 @@ publishQueue = queue.Queue()
 #
 ####################################################
 
+logging.debug("Validate publisher type and if Kafka, configure Kafka properties, and if REST, start a restQueueThread")
+
 if( "publishType" not in globals()):
 
    logging.info("FATAL: publishType not set in sevone-watson-datachannel.props. Please set it to \"kafka\" or \"rest\"")
@@ -990,6 +1006,7 @@ if publishType.lower() == "kafka":
 elif publishType.lower() == "rest":
 
    # start up a thread to pick up the queue messages and add them to the restMetricGroup["groups"] 
+   logging.debug("publishType is \'rest\', let's start a restQueueThread")
    
    restQueueThread = threading.Thread(target=restQueueReader)
    restQueueThread.daemon = True
