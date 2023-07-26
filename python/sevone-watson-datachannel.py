@@ -574,12 +574,21 @@ def configProperties():
       sevOneKafkaServers = datachannelProps['sevOneKafkaServers']
       logging.debug("sevOneKafkaServers = " + str(sevOneKafkaServers))
    
-   if( "publishType" not in globals()):
+   if( "publishType" in globals()):
+      publishType = datachannelProps["publishType"]
+   else: 
+      if productTarget == "pi":
+         logging.info("FATAL: publishType not set in sevone-watson-datachannel.props. Please set it to \"kafka\" or \"rest\"")
+         exit()
+      else:
+         logging.info("INFO: publishType not set but productTarget is \'aiops\', defaulting to \'rest\'")
+         publishType = "rest"
 
-      logging.info("FATAL: publishType not set in sevone-watson-datachannel.props. Please set it to \"kafka\" or \"rest\"")
-      exit()
+   if( publishType.lower == "kafka" ):
 
-   if( publishType == "kafka" ):
+      if productTarget.lower() == "aiops":
+         logging.info("FATAL: publishType is set to \'kafka'\, but productTarget is \'aiops\'. This is an unsupported configuration. For productTarget of \'aiops\' you must use \'rest\'")
+         exit()
 
    # Ensure that one or more Watson AIOps Kafka servers are defined
 
@@ -701,6 +710,25 @@ def configProperties():
    else:
       logging.info("FATAL: Datachannel property 'watsonProductTarget' is not set, must be set to either \"pi\" for Predictive Insights, or \"aiops\" for NOI/WatsonAIOps")
       exit()
+
+   # valiate required properties for a watsonProductTarget of "aiops"
+   
+   if watsonProductTarget == "aiops":
+      if datachannelProps['watsonTenantId'] in datachannelProps:
+         watsonTenantId = datachannelProps['watsonTenantId']
+         logging.debug("AIOps tenant id is: " + watsonTenantId)
+         if(watsonTenentId != "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"):
+            logging.info("WARNING: Watson/AIOps TenantId is not the default TenantId")
+      else:
+         logging.info("NOTE: datachannel property \'watsonTenantId\' is missing in the configuration file. Using default")
+         watsonTenentId = "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"
+      
+      if datachannelProps['watsonRestRoute'] in datachannelProps:
+         watsonRestRoute = datachannelProps['watsonRestRoute'] 
+         targetURL = watsonRestRoute
+      else:
+         logging.info("FATAL: watsonRestRoute not configured in datachannel properties file. Add the property should be in the form: https://myOpenshiftDNSName/aiops/api/app/metric-api/v1/metrics")
+         exit()
 
 #   # Determine whether SSL communication is required for the Watson Kafka broker(s)
 #
@@ -960,8 +988,6 @@ if publishType.lower() == "kafka":
 
 
 elif publishType.lower() == "rest":
-
-   
 
    # start up a thread to pick up the queue messages and add them to the restMetricGroup["groups"] 
    

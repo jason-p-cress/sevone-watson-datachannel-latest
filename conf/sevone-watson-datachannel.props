@@ -11,7 +11,7 @@ sevOneKafkaDataFormat = "Avro"
 sevOneKafkaTopicName = "sdb"
 
 # sevOneKafkaServers - enter hostname/IP addresses and ports of SevOne kafka bootstrap servers. Separate multiple servers by comma. Example: "sevonedbhost1:9092,sevonedbhost2:9092"
-sevOneKafkaServers = "CHANGEME.mydomain.com:9092"
+sevOneKafkaServers = "sevonedatabusserver:9092"
 
 # sevOneKafkaSSL - "true" if SSL is required, "false" if SSL is not enabled. If SSL is required, ensure that the conf/sevone-kafka-ssl.props is configured properly with CA certificate, server certificate, and key file
 sevOneKafkaSSL = "true"
@@ -21,7 +21,7 @@ sevOneKafkaSSL = "true"
 #########################################################################
 
 # (not implemented yet)
-# watsonProductTarget - either 'watson' or 'pi'. Use 'pi' for Predictive Insights, or 'aiops' for Metric Anomaly Detection (MAD) on AI Manager or NOI
+# watsonProductTarget - either 'aiops' or 'pi'. Use 'pi' for Predictive Insights, or 'aiops' for Metric Anomaly Detection (MAD) on AI Manager, AIOps,  or NOI
 watsonProductTarget = "pi"
 
 # (not implemented yet - currently only supports kafka)
@@ -30,18 +30,22 @@ watsonProductTarget = "pi"
 publishType = "rest" 
 
 # watsonKafkaServers - enter hostname/IP addresses and ports of the PI Kafka bootstrap servers. Separate multiple servers by comma. Example: "waiopskafkahost1:9092,waiopskafkahost2:9092
+# ignored if publishType = "rest"
 watsonKafkaServers = "localhost:9092"
 
 # watsonKafkaTopicName - the topic name of the configured kafka. Typically 'metrics'
+# ignored if publishType = "rest"
 watsonKafkaTopicName = "metrics"
 
 # watsonKafkaSSL - "true" if ssl is required, "false" if SSL is not enabled. If SSL is required, ensure that the conf/watson-kafka-ssl.props is configured properly
+# ignored if publishType = "rest"
 watsonKafkaSSL = "false"
 
 # watsonMetricGroup - the metric group name used when submitting metrics. Defaults to 'sevone'. Only change this if you have a good reason.
 watsonMetricGroup = "sevone"
 
 # watsonTopicName - the name of the Predictive Insights topic that was created to ingest Kafka/REST metrics... only applicable to Predictive Insights target 
+# ignored if watsonProductTarget = "aiops"
 watsonTopicName = "SEVONE"
 
 # watsonTopicAggInterval - The aggregation interval of the watson topic IN MINUTES. Defaults to 5. This is not strictly required to be set 
@@ -49,14 +53,27 @@ watsonTopicName = "SEVONE"
 # accurate information regarding the number of metrics that are collected per interval, which is useful for PI sizing. If 'watsonProductTarget' is 'watson', the default is 5 minutes
 watsonTopicAggInterval = 5
 
-restMediationServiceAuthentication = "false"
-restMediationServiceUsername = "myuser"
-restMediationServicePassword = "mypassword"
-restMediationServiceProtocol = "https"
-# use the hostname of the route for the metrics API in Watson, or the REST mediation service host for PI
+# watsonTenantId - the TenantId of the AIOps installation. Only change this if it has been customized
+# This property is ignored if watsonProductTarget = "pi"
+watsonTenantId = "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"
+
+# watsonMetricRoute - this is the exposed route to the metrics API for Metric Anomaly Detection
+# This property is ignored if watsonProductTarget = "pi"
+watsonRestRoute = "https://myOpenshiftDNSName/aiops/api/app/metric-api-v1/metrics"
+
+
+# The next three configuration properties are needed for the PI rest mediation utility. If authentication is rquired, set restMediationServiceAuthentication to "true" and add the username and password configured in the 
+# metric-api-service.yaml 
+# These are ignored if watsonProductTarget = "aiops"
+restMediationServiceAuthentication = "true"
+restMediationServiceUsername = "system"
+restMediationServicePassword = "pi-rest-mediation-password"
+
+# Protocol, hostname, and port of the PI rest mediation service as configured in 'metric-api-service.yaml'
+# These properties are ignored if watsonProductTarget = "aiops"
+restMediationServiceProtocol = "http"
 restMediationServiceHost = "localhost"
-# For watson this will be 443, for pi it will be whatever the metrics-api process is configured to listen on
-restMediationServicePort = "443"
+restMediationServicePort = "8197"
 
 ###########################
 # Extended logging options:
