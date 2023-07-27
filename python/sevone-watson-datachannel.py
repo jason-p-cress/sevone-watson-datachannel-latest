@@ -134,6 +134,8 @@ def postMetric(postedData):
 
    # accepts a JSON payload and posts it to watson
 
+   retryCount = 3
+
    if 1 == 1: 
 
       #global restMediationServiceHost
@@ -151,44 +153,47 @@ def postMetric(postedData):
       #
       #######################################################
    
+      doRetry = True
+      retries = 0
    
       method = "POST"
    
-      logging.debug("setting up the targetUrl")
-   
-#      targetUrl = 'http://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
-#      if(watsonProductTarget == "pi"):
-#         targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
-#         #targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/metrics/api/1.0/metrics'
-#         #targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/ioa/metrics'
-#      elif(watsonProductTarget == "aiops"):
-#         targetUrl = restMediationServiceProtocol + '://' + restMediationServiceHost + ':' + restMediationServicePort + '/aiops/api/app/metric-api/v1/metrics'
-#         #targetUrl = watsonRestRoute
-      
       logging.debug("requestURL is " + targetUrl + ", now going to post")
-   
-      try:
-         request = urllib2.Request(targetUrl, data=encodedMetricData)
-         request.add_header("Content-Type",'application/json')
-         if(watsonProductTarget == "pi"):
-            request.add_header("X-TenantID",watsonTopicName)
-         logging.debug("setting authentication header, if required")
-         if(restMediationServiceAuthentication.lower() == "true"):
-            request.add_header("Authorization",authHeader)
-         if(watsonProductTarget == "aiops"):
-            request.add_header("X-TenantID",watsonTenantId)
-            request.add_header("Authorization", "ZenApiKey " + watsonApiKey)
-         request.get_method = lambda: method
-         response = urllib2.urlopen(request)
-   
-      except IOError as e:
-         logging.info('Failed to open "%s".' % targetUrl)
-         if hasattr(e, 'code'):
-            logging.info('We failed with error code - %s.' % e.code)
-         elif hasattr(e, 'reason'):
-            logging.info("The error object has the following 'reason' attribute :")
-            logging.info(e.reason)
-         #@return False
+
+      while doRetry == True:
+         try:
+            request = urllib2.Request(targetUrl, data=encodedMetricData)
+            request.add_header("Content-Type",'application/json')
+            if(watsonProductTarget == "pi"):
+               request.add_header("X-TenantID",watsonTopicName)
+            logging.debug("setting authentication header, if required")
+            if(restMediationServiceAuthentication.lower() == "true"):
+               request.add_header("Authorization",authHeader)
+            if(watsonProductTarget == "aiops"):
+               request.add_header("X-TenantID",watsonTenantId)
+               request.add_header("Authorization", "ZenApiKey " + watsonApiKey)
+            request.get_method = lambda: method
+            response = urllib2.urlopen(request)
+            doRetry = False
+      
+         except IOError as e:
+            retries = retries + 1
+            logging.info('Failed to open "%s".' % targetUrl)
+            if hasattr(e, 'code'):
+               logging.info('We failed with error code - %s.' % e.code)
+            elif hasattr(e, 'reason'):
+               logging.info("The error object has the following 'reason' attribute :")
+               logging.info(e.reason)
+
+            if retries != retryCount:
+               logging.info("going to retry, sleeping for " + str(retries * 5) + " seconds...")
+               time.sleep(retries * 3) 
+            else:
+               logging.info("max retries reached for metric post, saving to file and continuing...")
+               currTime = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+               savFile = open(mediatorHome + "/log/metricsave__" + currTime + ".json", "w")
+               savFile.write(encodedMetricData)
+               doRetry == False 
 
 
 
@@ -252,8 +257,8 @@ def logTimeDelta(first):
       logging.info('Number of unique metric indicators: ' + str(len(intervalMetricSet)))
       logging.info('Number of unique resources: ' + str(len(intervalResourceSet)))
       logging.info('Datachannel producer queue length: ' + str(publishQueue.qsize()))
-      #if(publishType.lower() == "rest"):
-      #   logging.info('Size of metricGroup now: ' + str(len(restMetricGroup["groups"] )))
+      if(publishType.lower() == "rest"):
+         logging.info('Size of metricGroup now: ' + str(len(restMetricGroup["groups"] )))
       intervalMetricSet.clear()
       intervalResourceSet.clear()
       intervalMetricCount = 0
@@ -728,7 +733,7 @@ def configProperties():
    # valiate required properties for a watsonProductTarget of "aiops"
    
    if watsonProductTarget == "aiops":
-      if datachannelProps['watsonTenantId'] in datachannelProps:
+      if 'watsonTenantId' in datachannelProps:
          watsonTenantId = datachannelProps['watsonTenantId']
          logging.debug("AIOps tenant id is: " + watsonTenantId)
          if(watsonTenentId != "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"):
@@ -737,7 +742,7 @@ def configProperties():
          logging.info("NOTE: datachannel property \'watsonTenantId\' is missing in the configuration file. Using default")
          watsonTenentId = "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"
       
-      if datachannelProps['watsonRestRoute'] in datachannelProps:
+      if 'watsonRestRoute' in datachannelProps:
          watsonRestRoute = datachannelProps['watsonRestRoute'] 
          targetUrl = watsonRestRoute
       else:
