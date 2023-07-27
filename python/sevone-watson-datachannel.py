@@ -134,7 +134,7 @@ def postMetric(postedData):
 
    # accepts a JSON payload and posts it to watson
 
-   retryCount = 3
+   retryCount = 4
 
    if 1 == 1: 
 
@@ -154,7 +154,7 @@ def postMetric(postedData):
       #######################################################
    
       doRetry = True
-      retries = 0
+      retries = 1
    
       method = "POST"
    
@@ -177,23 +177,23 @@ def postMetric(postedData):
             doRetry = False
       
          except IOError as e:
-            retries = retries + 1
             logging.info('Failed to open "%s".' % targetUrl)
             if hasattr(e, 'code'):
                logging.info('We failed with error code - %s.' % e.code)
-            elif hasattr(e, 'reason'):
+            if hasattr(e, 'reason'):
                logging.info("The error object has the following 'reason' attribute :")
                logging.info(e.reason)
 
             if retries != retryCount:
-               logging.info("going to retry, sleeping for " + str(retries * 5) + " seconds...")
+               retries = retries + 1
+               logging.info("going to retry, sleeping for " + str(retries * 3) + " seconds...")
                time.sleep(retries * 3) 
             else:
                logging.info("max retries reached for metric post, saving to file and continuing...")
                currTime = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
                savFile = open(mediatorHome + "/log/metricsave__" + currTime + ".json", "w")
                savFile.write(encodedMetricData)
-               doRetry == False 
+               doRetry = False 
 
 
 
@@ -736,17 +736,23 @@ def configProperties():
       if 'watsonTenantId' in datachannelProps:
          watsonTenantId = datachannelProps['watsonTenantId']
          logging.debug("AIOps tenant id is: " + watsonTenantId)
-         if(watsonTenentId != "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"):
+         if(watsonTenantId != "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"):
             logging.info("WARNING: Watson/AIOps TenantId is not the default TenantId")
       else:
          logging.info("NOTE: datachannel property \'watsonTenantId\' is missing in the configuration file. Using default")
-         watsonTenentId = "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"
+         watsonTenantId = "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"
       
       if 'watsonRestRoute' in datachannelProps:
          watsonRestRoute = datachannelProps['watsonRestRoute'] 
          targetUrl = watsonRestRoute
       else:
          logging.info("FATAL: watsonRestRoute not configured in datachannel properties file. Add the property should be in the form: https://myOpenshiftDNSName/aiops/api/app/metric-api/v1/metrics")
+         exit()
+
+      if 'watsonApiKey' in datachannelProps:
+         watsonApiKey = datachannelProps['watsonApiKey']
+      else:
+         logging.info("FATAL: watsonApiKey not configured in datachannel properties file. Create an API Key and configure the watsonApiKey property")
          exit()
 
 #   # Determine whether SSL communication is required for the Watson Kafka broker(s)
