@@ -13,6 +13,7 @@
 #
 #
 
+import gzip
 import urllib2
 import base64
 from avro.io import DatumReader
@@ -42,6 +43,17 @@ import re
 import time
 import signal
 
+
+def writeZipFile(fileName, metricData):
+
+   #myZipFile = zipfile.ZipFile(fileName + ".zip", mode='w')
+   #myZipFile.writestr(fileName, metricData)
+   #close(myZipFile) 
+
+   gz = gzip.open(fileName + ".gz", 'wb')
+   gz.write(metricData)
+   gz.close()
+   
 def shutdownHandler(*args):
    shutdownRequest = True
    raise SystemExit('Exiting')
@@ -190,9 +202,11 @@ def postMetric(postedData):
                time.sleep(retries * 3) 
             else:
                logging.info("max retries reached for metric post, saving to file and continuing...")
-               currTime = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-               savFile = open(mediatorHome + "/log/metricsave__" + currTime + ".json", "w")
-               savFile.write(encodedMetricData)
+               savFileName = mediatorHome + "/log/metricsave__" + datetime.now().strftime("%Y-%m-%d_%H:%M:%S") + ".json"
+               wrz = threading.Thread(target=writeZipFile, args=(savFileName, encodedMetricData), kwargs={})
+               wrz.start()
+               #savFile = open(mediatorHome + "/log/metricsave__" + currTime + ".json", "w")
+               #savFile.write(encodedMetricData)
                doRetry = False 
 
 
