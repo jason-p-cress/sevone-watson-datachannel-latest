@@ -354,6 +354,7 @@ def restQueueReader():
 
    global shutdownRequest
    restBatchSize = 10000
+   publishFrequency = 60
 
    global restMetricGroup 
 
@@ -363,6 +364,7 @@ def restQueueReader():
    # block until a message hits the publish queue
 
    print("Starting queue reader for REST publishing")
+   lastPublishTime = int(time.time())
    while shutdownRequest != True:
       item = publishQueue.get()
       #print("got an item: " + json.dumps(item, indent=4))
@@ -374,9 +376,13 @@ def restQueueReader():
          postMetric(json.dumps(restMetricGroup))
          restMetricGroup.clear()
          restMetricGroup["groups"] = []
-      #for metric in item["groups"]:
-      #   print("metric is: " + json.dumps(metric, indent=4))
-      #   restMetricGroup["groups"].append(metric)
+         lastPublishTime = int(time.time())
+      elif( int(time.time()) - lastPublishTime > publishFrequency  and len(restMetricGroup["groups"]) > 0 ):
+         logging.debug("publishing " + str(len(restMetricGroup["groups"])) + " metrics on publishFrequency of " + str(publishFrequency))
+         postMetric(json.dumps(restMetricGroup))
+         restMetricGroup.clear()
+         restMetricGroup["groups"] = []
+         lastPublishTime = int(time.time())
       publishQueue.task_done()
 
 
