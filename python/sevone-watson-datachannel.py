@@ -184,6 +184,7 @@ def postMetric(postedData):
             if(watsonProductTarget == "aiops"):
                request.add_header("X-TenantID",watsonTenantId)
                request.add_header("Authorization", "ZenApiKey " + watsonApiKey)
+            logging.debug("Posting with headers: " + str(request.headers))
             request.get_method = lambda: method
             response = urllib2.urlopen(request)
             doRetry = False
