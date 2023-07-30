@@ -183,7 +183,7 @@ def postMetric(postedData):
                request.add_header("Authorization",authHeader)
             if(watsonProductTarget == "aiops"):
                request.add_header("X-TenantID",watsonTenantId)
-               request.add_header("Authorization", "ZenApiKey " + watsonApiKey)
+               request.add_header("Authorization", "ZenApiKey " + zenApiKey)
             logging.debug("Posting with headers: " + str(request.headers))
             request.get_method = lambda: method
             response = urllib2.urlopen(request)
@@ -775,6 +775,16 @@ def configProperties():
       else:
          logging.info("FATAL: watsonApiKey not configured in datachannel properties file. Create an API Key and configure the watsonApiKey property")
          exit()
+
+      if 'watsonUser' in datachannelProps:
+         watsonUser = datachannelProps['watsonUser']
+      else:
+         logging.info("FATAL: watsonUser is not configured in datachannel properties file. Create an API Key and configure the watsonUser property")
+         exit()
+      
+      global zenApiKey
+
+      zenApiKey = base64.b64encode(watsonUser + ":" + watsonApiKey)
 
 #   # Determine whether SSL communication is required for the Watson Kafka broker(s)
 #

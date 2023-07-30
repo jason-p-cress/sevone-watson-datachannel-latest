@@ -61,6 +61,11 @@ watsonTenantId = "cfd95b7e-3bc7-4006-a4a8-a73a79c71255"
 # This property is ignored if watsonProductTarget = "pi"
 watsonRestRoute = "https://myOpenshiftDNSName/aiops/api/app/metric-api-v1/metrics"
 
+#watsonUser - the username of the user who generated the API that will be used
+watsonUser = "system"
+
+# watsonApiKey is required to send to Metric Anomaly Detection
+watsonApiKey = "xxxyyyzzz"
 
 # The next three configuration properties are needed for the PI rest mediation utility. If authentication is rquired, set restMediationServiceAuthentication to "true" and add the username and password configured in the 
 # metric-api-service.yaml 
