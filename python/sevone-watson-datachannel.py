@@ -156,7 +156,7 @@ def postMetric(postedData):
       #global restMediationServiceAuthentication
    
       #encodedMetricData = metricData.encode('utf-8')
-      encodedMetricData = json.dumps(postedData).encode('utf-8')
+      encodedMetricData = postedData.encode('utf-8')
    
       #logging.debug("going to publish the following: " + str(encodedMetricData))
       #######################################################
